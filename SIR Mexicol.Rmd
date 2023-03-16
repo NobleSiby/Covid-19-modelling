@@ -1,0 +1,193 @@
+---
+title: "R Notebook"
+output: html_notebook
+
+#importing modules
+
+library(tidyverse)
+library(tidyverse)
+library(here)
+library(ggplot2)
+
+#INtroducing thresholds
+
+Covid_data <- read_csv(file='COVID_global_data.csv')
+Mexico_data<-Covid_data %>% filter(Country=="Mexico")
+Mexico_data1<-Mexico_data %>% filter(Cumulative_cases>=116)
+ggplot(data=Mexico_data1, mapping = aes(x=Date_reported, y=Cumulative_cases))+
+  geom_line(color="Red",)
+  
+Mexico_data1<- Mexico_data1 %>% mutate(Normalized=Mexico_data1$Cumulative_cases/130729141)
+ggplot(data=Mexico_data1, mapping = aes(x=Date_reported, y=Normalized))+
+  geom_line(color="Brown",)
+
+Mexico_data2<- Mexico_data1 %>% mutate(log=log(Mexico_data1$Normalized))
+Mexico_data2$Day_from_start <- seq.int(nrow(Mexico_data2))
+g<-ggplot(data=Mexico_data2, mapping = aes(x=Day_from_start, y=log))+
+  geom_line()
+g
+
+#Mexico_data3<-cbind(Mexico_data2[c("Day_from_start", "log")])
+#c1<-data.frame(x1=1, y1=-13.917953,x2= 130,y2=-5.845235,x3=227,y3=-4.964354,x4=320,y4=-4.254041,x5=460,y5=-3.966602,x6=551,y6=-3.602049)
+
+#g+
+ #geom_segment(aes(x = x1, y = y1, xend = x2, yend =     y2,colour = "growth_1"), data = c1)+
+ #geom_segment(aes(x = x2, y = y2, xend = x3, yend =     y3,colour = "sat_1"), data = c1)+
+ #geom_segment(aes(x = x3, y = y3, xend = x4, yend =     y4,colour = "growth_2"), data = c1)+
+ #geom_segment(aes(x = x4, y = y4, xend = x5, yend =     y5,colour = "sat_2"), data = c1)+
+ #geom_segment(aes(x = x5, y = y5, xend = x6, yend =     y6,colour = "growth_3"), data = c1)
+ 
+identify_rows <- Mexico_data2$Day_from_start >= 1 & Mexico_data2$Day_from_start <= 227  
+
+wave_1<- Mexico_data2[identify_rows, ]          
+wave_1
+
+var<- c("Day_from_start","Normalized","log","Date_reported")
+wave_1<-wave_1[var]
+wave_1
+
+Mexico_data2<-Mexico_data2[-c(2:4)]
+
+ggplot() + 
+  geom_line(data = wave_1, aes(x = Day_from_start, y = log), color = "blue")
+
+#INITIAL_PARAMETERS
+R_0<- 11/130729141
+I_0<- Mexico_data2$Normalized[1]-R_0
+S_0<- 1-I_0-R_0
+
+regr_1=lm(log ~ Day_from_start, data=subset(wave_1,Day_from_start>=31 | Day_from_start<81 )) # values= [1,30],[31,80],[1,80]
+summary(regr_1)
+b<- 0.1
+#Solving_ODE
+a<- coef(regr_1)["Day_from_start"]+ b
+
+time=seq(from=1,to=551,by=1)
+
+init<-c(S_0,R_0)
+parameters<-c(a,b)
+
+sir_model <- function(t,y,parameters){
+  with(as.list(c(y,parameters)),{
+    I<- 1-y[1]-y[2]
+    dS<- -a * y[1] * I
+    dR<- b * I
+    return(list(c(dS,dR)))
+  })
+}
+
+
+#Solving the differential equations
+library(deSolve)
+
+output<-as.data.frame(ode(y=init,func = sir_model,parms=parameters,times = time))
+
+output$p<- 1- output[2]
+
+output$p <- unlist(output$p)
+
+ODE_error<- (output$p-Mexico_data2$Normalized)
+
+MSE<- mean(ODE_error^2)
+
+
+
+ggplot() + 
+  geom_line(data = Mexico_data2, aes(x = Day_from_start, y = Normalized), color = "blue") +
+  geom_line(data = output, aes(x = time , y = p), color = "black")+
+  xlab('Day form start')+
+  ylab('Fraction of infected population')+
+  ylim(0,0.06)
+
+
+#LOOP
+I_0<- (Mexico_data2$Normalized[1]-R_0)/2
+#x<-data.frame(matrix(nrow = 551, ncol = 2))
+d=NULL
+for (i in 1:3){
+    S_0<- 1-I_0-R_0
+    init<- c(S_0,R_0)
+    output_2<-as.data.frame(ode(y=init,func=sir_model,parms=parameters,times = time))
+    p<- 1-output_2[2]
+    I_0 = I_0 * 2
+    print(i)
+    print(output_2)
+    d=rbind(d, data.frame(p))
+    #I_0 = I_0 * 2
+}
+
+d$Day_from_start <- seq.int(nrow(d))
+
+d$I_1<- d[1:551,1]
+
+#d[unlist(X,Day_from_start)]
+#I<-data.frame(I_1=rep(0, 551))
+#I$I_2=subset(d,Day_from_start<=551, select=X)
+
+#exponential model calculation
+
+exp_model=data.frame()
+for(i in 1:227){
+out=c(exp(-11.939825+(0.054745*i)))
+exp_model=rbind(exp_model,out)
+}
+wave_1$exp_val<-exp_model
+wave_1<-wave_1 %>% mutate(expo_error=Normalized-exp_val)
+
+sse_exp<-sum((wave_1$expo_error)^2)
+
+wave_1$exp_val <- unlist(wave_1$exp_val)
+
+#graph of exp model
+
+ggplot() + 
+  geom_line(data = wave_1, aes(x = Day_from_start, y = Normalized), color = "blue") +
+  geom_line(data = wave_1, aes(x = Day_from_start, y = exp_val), color = "red") +
+  xlab('Day form start') +
+  ylab('cumulative fraction')
+
+
+
+#error_calc
+wave_1$expo_error <- unlist(wave_1$expo_error)
+
+ggplot(data=wave_1, mapping = aes(x=Day_from_start, y=expo_error))+
+  geom_line()
+
+wave_1<- wave_1 %>% mutate(K=wave_1$Normalized*(1+wave_1$exp_val)/wave_1$exp_val)
+  ggplot(data=wave_1, mapping = aes(x=Day_from_start, y=K))+
+  geom_line()
+
+wave_1<- wave_1 %>% mutate(ln_par=log(wave_1$Normalized/0.01562530-wave_1$Normalized))
+
+regr_2=lm(ln_par ~ Day_from_start, data= wave_1)
+summary(regr_2)
+
+wave_1<- wave_1 %>% 
+mutate(var_reg=-6.059498+0.030527*(wave_1$Day_from_start))
+
+#graph of variable of reg 
+ggplot() + 
+  geom_line(data = wave_1, aes(x = Day_from_start, y = ln_par), color = "blue") +
+  geom_line(data = wave_1, aes(x = Day_from_start, y = var_reg), color = "red") +
+  xlab('Date') +
+  ylab('ln(p/k-p)')
+
+wave_1<- wave_1 %>% mutate(logi_par=exp(-6.059498 +0.030527*(wave_1$Day_from_start)))
+
+wave_1<- wave_1 %>% mutate(logistic_model=0.01562530*wave_1$logi_par/(1+wave_1$logi_par))
+
+
+
+wave_1<- wave_1 %>% mutate(logi_error=wave_1$Normalized-wave_1$logistic_model)
+
+#graph of logistic model
+
+ggplot() + 
+  geom_line(data = wave_1, aes(x = Day_from_start, y = Normalized), color = "blue") +
+  geom_line(data = wave_1, aes(x = Day_from_start, y = logistic_model), color = "red") +
+  xlab('Date') +
+  ylab('cumulative fraction')
+ 
+sse_init_k<-sum((wave_1$logi_error)^2)
+
